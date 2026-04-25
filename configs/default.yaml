@@ -1,0 +1,23 @@
+# Default configuration for rough-vol-engine simulations.
+
+simulation:
+  n_paths: 10000
+  n_steps: 252
+  seed: 42
+  scheme: hybrid        # "hybrid" or "cholesky"
+
+model:
+  name: rbergomi
+  hurst: 0.1            # H in (0, 0.5) for rough regime
+  eta: 1.9              # vol-of-vol
+  rho: -0.9             # spot-vol correlation
+  xi0: 0.04             # initial forward variance (≈ σ₀²)
+
+pricing:
+  risk_free_rate: 0.0
+  dividend_yield: 0.0
+
+calibration:
+  method: differential_evolution
+  max_iter: 1000
+  tol: 1.0e-6
