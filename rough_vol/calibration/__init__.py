@@ -15,6 +15,7 @@ from rough_vol.calibration.objective import (
 )
 from rough_vol.calibration.optimizer import (
     CalibrationResult,
+    RoughVolCalibrator,
     calibrate_rbergomi,
     calibrate_rfheston,
 )
@@ -28,6 +29,7 @@ __all__ = [
     "weighted_rmse",
     "weighted_mae",
     "CalibrationResult",
+    "RoughVolCalibrator",
     "calibrate_rbergomi",
     "calibrate_rfheston",
 ]
