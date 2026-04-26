@@ -33,7 +33,7 @@ import numpy as np
 from scipy.optimize import OptimizeResult, differential_evolution, minimize
 
 from rough_vol.calibration.objective import RBergomiObjective, RHestonObjective
-from rough_vol.calibration.surface import VolSurface
+from rough_vol.calibration.surface import ImpliedVolSurface
 from rough_vol.models.rbergomi import RBergomiParams
 from rough_vol.models.rfheston import RHestonParams
 
@@ -128,12 +128,12 @@ def _nelder_mead_polish(
 # ---------------------------------------------------------------------------
 
 def calibrate_rbergomi(
-    surface: VolSurface,
+    surface: ImpliedVolSurface,
     *,
     n_paths: int = 5_000,
     n_steps_per_year: int = 52,
     rng_seed: int = 42,
-    metric: Literal["rmse", "mae"] = "rmse",
+    weight_scheme: Literal["uniform", "vega", "relative"] = "uniform",
     # Differential Evolution
     de_popsize: int = 10,
     de_maxiter: int = 300,
@@ -161,17 +161,16 @@ def calibrate_rbergomi(
 
     Parameters
     ----------
-    surface : VolSurface
-        Market implied-volatility surface (strikes as moneyness, IVs as
-        decimals).
+    surface : ImpliedVolSurface
+        Market implied-volatility surface.
     n_paths : int
         MC paths per objective evaluation.
     n_steps_per_year : int
         Path-simulation time steps per year.
     rng_seed : int
         Fixed seed making the MC objective deterministic.
-    metric : {'rmse', 'mae'}
-        Calibration loss function.
+    weight_scheme : {'uniform', 'vega', 'relative'}
+        Calibration weight scheme.
     de_popsize : int
         DE population multiplier (actual size = ``de_popsize * n_params``).
     de_maxiter : int
@@ -202,10 +201,10 @@ def calibrate_rbergomi(
     """
     obj = RBergomiObjective(
         surface,
+        weight_scheme=weight_scheme,
         n_paths=n_paths,
         n_steps_per_year=n_steps_per_year,
         rng_seed=rng_seed,
-        metric=metric,
     )
 
     de_res = differential_evolution(
@@ -257,9 +256,9 @@ def calibrate_rbergomi(
 # ---------------------------------------------------------------------------
 
 def calibrate_rfheston(
-    surface: VolSurface,
+    surface: ImpliedVolSurface,
     *,
-    metric: Literal["rmse", "mae"] = "rmse",
+    weight_scheme: Literal["uniform", "vega", "relative"] = "uniform",
     n_steps: int = 100,
     n_quad: int = 64,
     # Differential Evolution
@@ -289,10 +288,10 @@ def calibrate_rfheston(
 
     Parameters
     ----------
-    surface : VolSurface
+    surface : ImpliedVolSurface
         Market implied-volatility surface.
-    metric : {'rmse', 'mae'}
-        Loss function.
+    weight_scheme : {'uniform', 'vega', 'relative'}
+        Calibration weight scheme.
     n_steps : int
         Adams-scheme time steps for the fractional Riccati solver.
     n_quad : int
@@ -316,9 +315,9 @@ def calibrate_rfheston(
     """
     obj = RHestonObjective(
         surface,
+        weight_scheme=weight_scheme,
         n_steps=n_steps,
         n_quad=n_quad,
-        metric=metric,
     )
 
     de_res = differential_evolution(
