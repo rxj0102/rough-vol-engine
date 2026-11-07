@@ -1,5 +1,7 @@
 # rough-vol-engine
 
+[![CI](https://github.com/rxj0102/rough-vol-engine/actions/workflows/ci.yml/badge.svg)](https://github.com/rxj0102/rough-vol-engine/actions/workflows/ci.yml)
+
 ![Tests](https://img.shields.io/badge/tests-passing-brightgreen)
 ![Python](https://img.shields.io/badge/python-3.10%2B-blue)
 ![License](https://img.shields.io/badge/license-MIT-blue)
