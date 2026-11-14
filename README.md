@@ -18,8 +18,8 @@ parameter calibration framework built on fractional Brownian motion (fBm).
 
 | Model | Reference | Characteristic function | MC simulation |
 |---|---|---|---|
-| **Rough Bergomi** (rBergomi) | Bayer, Friz & Gatheral (2016) | — | Hybrid fBm scheme |
-| **Rough Heston** (rfHeston) | El Euch & Rosenbaum (2019) | Adams fractional Riccati | — |
+| **Rough Bergomi** (rBergomi) | Bayer, Friz & Gatheral (2016) | n/a | Hybrid fBm scheme |
+| **Rough Heston** (rfHeston) | El Euch & Rosenbaum (2019) | Adams fractional Riccati | n/a |
 
 Both models reproduce the empirically observed power-law explosion of the
 short-maturity ATM implied-volatility skew,
@@ -336,4 +336,4 @@ Citation metadata is in `CITATION.cff`. GitHub turns it into a Cite this reposit
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT: see [LICENSE](LICENSE).
