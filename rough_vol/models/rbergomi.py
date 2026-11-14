@@ -16,7 +16,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from functools import lru_cache
+
 import numpy as np
+from scipy.special import hyp2f1
 from numpy.random import Generator, default_rng
 from scipy.stats import norm
 
@@ -172,6 +175,26 @@ def volterra_weights(n_steps: int, H: float, T: float) -> np.ndarray:
 # rBergomi path simulator
 # ---------------------------------------------------------------------------
 
+@lru_cache(maxsize=32)
+def _joint_cholesky(H: float, n_steps: int, T: float) -> np.ndarray:
+    """Cholesky factor of Cov([Wv(t_1..t_n), W(t_1..t_n)]) on the grid t_i = i T / n.
+
+    Cov(Wv(u), Wv(v)) = 2H/(H+1/2) u^(H+1/2) v^(H-1/2) 2F1(1/2-H, 1; 3/2+H; u/v) for u <= v
+    Cov(Wv(v), W(u))  = sqrt(2H)/(H+1/2) (v^(H+1/2) - (v - min(u, v))^(H+1/2))
+    Cov(W(u), W(v))   = min(u, v)
+    """
+    t = np.linspace(T / n_steps, T, n_steps)
+    u, v = np.meshgrid(t, t, indexing="ij")
+    lo, hi = np.minimum(u, v), np.maximum(u, v)
+    g = H + 0.5
+    cov_vv = 2 * H / g * lo ** g * hi ** (H - 0.5) * hyp2f1(0.5 - H, 1.0, 1.5 + H, lo / hi)
+    cov_vw = np.sqrt(2 * H) / g * (u ** g - (u - np.minimum(u, v)) ** g)   # rows Wv(u), cols W(v)
+    cov_ww = lo
+    C = np.block([[cov_vv, cov_vw], [cov_vw.T, cov_ww]])
+    jitter = 1e-12 * np.trace(C) / C.shape[0]
+    return np.linalg.cholesky(C + jitter * np.eye(C.shape[0]))
+
+
 def simulate_paths(
     params: RBergomiParams,
     n_paths: int,
@@ -221,52 +244,29 @@ def simulate_paths(
     H, eta, rho, xi0 = params.H, params.eta, params.rho, params.xi0
     dt = T / n_steps
 
-    # --- Simulate W^H increments via circulant embedding (exact, O(n log n)) ---
-    # hybrid_sim returns increments of shape (n_paths, n_steps)
-    dWH = hybrid_sim(n_paths, n_steps, H, T, rng=rng_)  # (n_paths, n_steps)
-
-    # W^H path (levels), shape (n_paths, n_steps + 1), starts at 0
-    WH = np.zeros((n_paths, n_steps + 1))
-    WH[:, 1:] = np.cumsum(dWH, axis=1)
-
-    # --- Correlated Brownian for spot process ---
-    # dW is the same driving Brownian as W^H's first Wiener increment.
-    # We approximate dW ~ dWH / sqrt(dt^{2H}) normalised to N(0, dt) scale.
-    # More precisely: draw independent standard Brownians and correlate with dWH.
-    #
-    # Strategy: generate a fresh N(0, dt) increment dW1 and an independent dWperp.
-    # Then dB = rho * dW1 + sqrt(1 - rho^2) * dWperp.
-    # To correlate dW1 with dWH, note that for the *first* W^H increment
-    # dWH_1 = dW_1 * dt^{H - 0.5} * integral term.
-    # The cleanest approach for rBergomi is to generate the *spot* Brownian
-    # increments as a linear combination of dWH and an independent component,
-    # using the covariance structure.
-    #
-    # The correlation between dB and each dWH_i is rho * Cov(dB, dWH_i) / Var(dWH_i).
-    # In BFG (2016) the spot driver dB is identified with the FIRST innovation in
-    # the W^H Cholesky decomposition. For the circulant-embedding approach we use:
-    #   dB_i = rho * (dWH_i / sqrt(Var(dWH_i))) * sqrt(dt) + sqrt(1-rho^2) * dWperp_i
-    # This gives Corr(dB_i, dWH_i) = rho for each time step.
-    #
-    # Note: Var(dWH_i) = dt^{2H} (same for all i, from the covariance formula).
-    var_dWH = dt ** (2 * H)
-    std_dWH = np.sqrt(var_dWH)
-
-    # Normalise W^H increments to unit-variance
-    dWH_normalised = dWH / std_dWH  # (n_paths, n_steps), N(0,1) scale per step
-
-    # Independent Brownian increments, N(0, dt)
+    # --- Exact joint simulation of the Volterra driver and its Brownian motion ---
+    # Bayer, Friz and Gatheral (2016): V is driven by the Riemann-Liouville process
+    #   Wv(t) = sqrt(2H) * int_0^t (t-s)^(H-1/2) dW(s),   Var Wv(t) = t^(2H),
+    # and the spot is driven by dB = rho dW + sqrt(1-rho^2) dW_perp, with the SAME W.
+    # (Wv, W) is jointly Gaussian with known covariance, so it is sampled exactly with
+    # a Cholesky factor. W has independent increments, so sqrt(V(t_i)) is independent
+    # of dB_i and the discretised price is a martingale.
+    L = _joint_cholesky(H, n_steps, T)                     # (2n, 2n)
+    Z = rng_.standard_normal((n_paths, 2 * n_steps))
+    X = Z @ L.T                                            # rows: [Wv(t_1..t_n), W(t_1..t_n)]
+    WV = np.zeros((n_paths, n_steps + 1))
+    WV[:, 1:] = X[:, :n_steps]
+    W = np.zeros((n_paths, n_steps + 1))
+    W[:, 1:] = X[:, n_steps:]
+    dW = np.diff(W, axis=1)                                # N(0, dt), independent across steps
     dWperp = rng_.standard_normal((n_paths, n_steps)) * np.sqrt(dt)
-
-    # Correlated spot Brownian increments
-    dB = rho * dWH_normalised * np.sqrt(dt) + np.sqrt(1.0 - rho ** 2) * dWperp
-    # shape (n_paths, n_steps)
+    dB = rho * dW + np.sqrt(1.0 - rho ** 2) * dWperp
 
     # --- Variance process ---
-    # V(t) = xi0 * exp(eta * W^H(t) - 0.5 * eta^2 * t^{2H})
-    times = np.linspace(0.0, T, n_steps + 1)  # (n_steps+1,)
-    drift = -0.5 * eta ** 2 * times ** (2 * H)  # (n_steps+1,)
-    V = xi0 * np.exp(eta * WH + drift[np.newaxis, :])  # (n_paths, n_steps+1)
+    # V(t) = xi0 * exp(eta * Wv(t) - 0.5 * eta^2 * t^{2H})
+    times = np.linspace(0.0, T, n_steps + 1)
+    drift = -0.5 * eta ** 2 * times ** (2 * H)
+    V = xi0 * np.exp(eta * WV + drift[np.newaxis, :])
 
     # --- Asset process (Euler-Maruyama on log price) ---
     # d(log S) = -V/2 dt + sqrt(V) dB

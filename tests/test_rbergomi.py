@@ -162,6 +162,18 @@ class TestSimulatePaths:
         mean_terminal = S[:, -1].mean()
         assert mean_terminal == pytest.approx(1.0, abs=0.05)
 
+    @pytest.mark.parametrize("H,rho", [(0.05, -0.9), (0.1, -0.9), (0.3, 0.7)])
+    def test_martingale_rough_correlated(self, H, rho):
+        """E[S_T] = 1 must hold for rough H and strong correlation, not only near H = 0.5 with rho = 0.
+
+        Regression test: driving the spot with fBm increments (correlated with the variance
+        history) made E[S_T] about 1.8 for H = 0.1, rho = -0.9.
+        """
+        p = RBergomiParams(H=H, eta=1.9, rho=rho, xi0=0.04)
+        _, S = simulate_paths(p, 20_000, 64, T=1.0, rng=11)
+        se = S[:, -1].std() / np.sqrt(S.shape[0])
+        assert abs(S[:, -1].mean() - 1.0) < 4 * se
+
     def test_reproducibility(self, default_params):
         V1, S1 = simulate_paths(default_params, 8, 16, T=1.0, rng=7)
         V2, S2 = simulate_paths(default_params, 8, 16, T=1.0, rng=7)

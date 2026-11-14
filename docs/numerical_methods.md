@@ -8,6 +8,8 @@ This document describes every numerical algorithm used in `rough-vol-engine`, wi
 
 Three algorithms are available. The library uses the **hybrid/circulant-embedding** method by default because it achieves the optimal $O(N \log N)$ cost while remaining exact.
 
+**Note on rBergomi paths.** `rough_vol.models.rbergomi.simulate_paths` does not use these fBm generators. The rBergomi variance is driven by the Riemann-Liouville process $\hat W_t = \sqrt{2H}\int_0^t (t-s)^{H-1/2} dW_s$, and the spot must be driven by the *same* Brownian motion $W$ through $\rho\,dW + \sqrt{1-\rho^2}\,dW^\perp$. fBm increments are correlated with the variance history when $H < 1/2$, so using them as the spot driver breaks the martingale property. `simulate_paths` therefore samples $(\hat W_{t_1..t_n}, W_{t_1..t_n})$ jointly and exactly from the Cholesky factor of their covariance (Bayer, Friz and Gatheral 2016), at $O(N^2)$ cost per path with the factor cached.
+
 ### 1.1 Cholesky method (exact, $O(N^2)$)
 
 The joint distribution of $(W^H_{t_1}, \ldots, W^H_{t_N})$ is multivariate Gaussian with covariance
