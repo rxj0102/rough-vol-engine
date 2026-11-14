@@ -102,7 +102,7 @@ def _fractional_riccati(
 
         D^α ψ = f(ψ)   where α = H + 1/2 ∈ (1/2, 1)
 
-    with f(ψ) = F_1 + F_2·ψ - ½ν²ψ²,  F_1 = -iu(iu+1)/2, F_2 = iuρν - λ.
+    with f(ψ) = F_1 + F_2·ψ + ½ν²ψ²,  F_1 = -iu(iu+1)/2, F_2 = iuρν - λ.
 
     Returns
     -------
@@ -119,7 +119,7 @@ def _fractional_riccati(
     dt = T / n_steps
     Ga = sc_gamma(alpha)
     Ga1 = sc_gamma(alpha + 1.0)
-    Ga2 = sc_gamma(2.0 * alpha + 1.0)
+    Ga2 = sc_gamma(alpha + 2.0)  # Adams corrector weights use Gamma(alpha + 2)
 
     # Coefficients of the fractional Riccati RHS
     # F(u, ψ) = F1 + F2·ψ − ½ν²ψ²
@@ -129,7 +129,7 @@ def _fractional_riccati(
     F2 = 1j * u * rho * nu - lambda_
 
     def rhs(psi: complex) -> complex:
-        return F1 + F2 * psi - 0.5 * nu ** 2 * psi ** 2
+        return F1 + F2 * psi + 0.5 * nu ** 2 * psi ** 2
 
     # Adams predictor-corrector for Caputo fractional ODE of order α
     # ψ(t_{n+1}) = sum_{j=0}^{n} a_{j,n+1} * f(ψ_j) + predictor term
@@ -144,7 +144,8 @@ def _fractional_riccati(
         j = np.arange(n + 1)
         # b_{j,n+1} = dt^alpha / Gamma(alpha+1) * ((n-j+1)^alpha - (n-j)^alpha)
         b = (dt ** alpha / Ga1) * ((n - j + 1) ** alpha - (n - j) ** alpha)
-        psi_pred = np.dot(b, np.array([rhs(psi[jj]) for jj in j]))
+        rhs_vals = rhs(psi[: n + 1])
+        psi_pred = np.dot(b, rhs_vals)
 
         # Corrector: implicit Adams–Moulton
         # a_{j,n+1} for j=0,1,...,n and j=n+1 (using predictor)
@@ -168,7 +169,6 @@ def _fractional_riccati(
         # j = n+1 (using predictor value)
         a[n + 1] = dt ** alpha / Ga2
 
-        rhs_vals = np.array([rhs(psi[jj]) for jj in range(n + 1)])
         psi[n + 1] = np.dot(a[:n + 1], rhs_vals) + a[n + 1] * rhs(psi_pred)
 
         # Abort if the solution has blown up (unphysical for reasonable parameters).
@@ -222,20 +222,14 @@ def characteristic_function(
     if not np.all(np.isfinite(psi)):
         return complex(float("nan"), float("nan"))
 
+    # El Euch and Rosenbaum (2019): log phi = lambda*theta * I^1 psi(T) + V0 * I^(1-alpha) psi(T).
+    # Since psi = I^alpha f(psi), I^(1-alpha) psi = I^1 f(psi), which avoids the singular kernel.
     dt = T / n_steps
-    t = np.linspace(0.0, T, n_steps + 1)
-    tau = T - t  # (T-s) for each grid point
-
-    # First term: λθ ∫_0^T ψ(u, s) ds  — plain integral, no kernel weight.
+    nu, rho = params.nu, params.rho
+    f_vals = -0.5 * u * (u + 1j) + (1j * u * rho * nu - lambda_) * psi + 0.5 * nu ** 2 * psi ** 2
     int1 = np.trapezoid(psi, dx=dt)
-
-    # Second term: V_0 ∫_0^T K_H(T-s) ψ(u, s) ds
-    # K_H(x) = x^{H-1/2} / Γ(H+1/2); guard 0^negative at s=T (tau=0).
-    safe_tau = np.where(tau > 0, tau, 1.0)
-    w2 = np.where(tau > 0, safe_tau ** (H - 0.5), 0.0)
-    int2 = np.trapezoid(w2 * psi, dx=dt)
-
-    log_cf = lambda_ * theta * int1 + V0 / sc_gamma(H + 0.5) * int2
+    int_f = np.trapezoid(f_vals, dx=dt)
+    log_cf = lambda_ * theta * int1 + V0 * int_f
     return complex(log_cf)
 
 

@@ -158,13 +158,44 @@ class TestPriceEuropeanRHeston:
         prices = price_european(default_params, K=K, T=1.0, r=0.0, S0=1.0, n_steps=100, n_quad=64)
         assert float(prices[0]) >= max(1.0 - K, 0) - 1e-4
 
-    def test_price_increases_with_vol(self):
-        """Higher nu → higher option price."""
+    def test_vol_of_vol_lowers_atm_and_raises_wings(self):
+        """Higher nu adds smile curvature: with rho = 0 the ATM price falls and the far OTM price rises.
+
+        This matches the classical Heston model (closed form at rho = 0: ATM call 0.0780 at nu = 0.2
+        versus 0.0715 at nu = 0.5, T = 1). The previous test asserted that the ATM price rises with nu,
+        which is false and only passed because of a sign error in the Riccati equation.
+        """
         params_lo = RHestonParams(H=0.1, lambda_=1.0, theta=0.04, rho=0.0, nu=0.2, V0=0.04)
         params_hi = RHestonParams(H=0.1, lambda_=1.0, theta=0.04, rho=0.0, nu=0.5, V0=0.04)
-        p_lo = price_european(params_lo, K=1.0, T=1.0, n_steps=100, n_quad=64)
-        p_hi = price_european(params_hi, K=1.0, T=1.0, n_steps=100, n_quad=64)
-        assert float(p_hi[0]) > float(p_lo[0])
+        K = np.array([1.0, 1.3])
+        p_lo = price_european(params_lo, K=K, T=1.0, n_steps=100, n_quad=64)
+        p_hi = price_european(params_hi, K=K, T=1.0, n_steps=100, n_quad=64)
+        assert p_hi[0] < p_lo[0]
+        assert p_hi[1] > p_lo[1]
+
+    def test_matches_classical_heston_near_half(self):
+        """At H close to 1/2 the rough Heston CF must match the closed-form Heston CF."""
+        from rough_vol.models.rfheston import characteristic_function
+
+        kappa, theta, sigma, rho, v0, T = 1.0, 0.04, 0.3, -0.7, 0.04, 0.5
+        p = RHestonParams(H=0.4999, lambda_=kappa, theta=theta, rho=rho, nu=sigma, V0=v0)
+        for u in (1.0, 5.0, 10.0):
+            iu = 1j * u
+            d = np.sqrt((rho * sigma * iu - kappa) ** 2 + sigma ** 2 * (iu + u ** 2))
+            g = (kappa - rho * sigma * iu - d) / (kappa - rho * sigma * iu + d)
+            e = np.exp(-d * T)
+            C = kappa * theta / sigma ** 2 * ((kappa - rho * sigma * iu - d) * T - 2 * np.log((1 - g * e) / (1 - g)))
+            D = (kappa - rho * sigma * iu - d) / sigma ** 2 * (1 - e) / (1 - g * e)
+            ref = np.exp(C + D * v0)
+            got = np.exp(characteristic_function(u, T, p, 800))
+            assert abs(got - ref) < 2e-4
+
+    def test_otm_prices_positive_and_monotone(self, default_params):
+        """Call prices must be positive and decreasing in strike (regression for negative OTM prices)."""
+        K = np.array([0.8, 0.9, 1.0, 1.1, 1.2])
+        p = price_european(default_params, K=K, T=0.5, n_steps=200, n_quad=128, u_max=100)
+        assert np.all(p > 0)
+        assert np.all(np.diff(p) < 0)
 
     def test_atm_price_reasonable(self, default_params):
         """ATM call should be between 1% and 50% of spot."""
@@ -203,12 +234,14 @@ class TestImpliedVolSurfaceRHeston:
         if valid.all():
             assert iv[0, 0] > iv[0, 1]
 
-    def test_vol_increases_with_nu(self):
-        """Higher nu → higher ATM implied vol."""
-        s = np.array([1.0])
+    def test_nu_increases_smile_curvature(self):
+        """Higher nu raises wing vol relative to ATM vol (with rho = 0, ATM vol itself falls, as in Heston)."""
+        s = np.array([0.8, 1.0, 1.25])
         m = np.array([1.0])
         p_lo = RHestonParams(H=0.1, lambda_=1.0, theta=0.04, rho=0.0, nu=0.2, V0=0.04)
         p_hi = RHestonParams(H=0.1, lambda_=1.0, theta=0.04, rho=0.0, nu=0.5, V0=0.04)
-        iv_lo = implied_vol_surface(p_lo, s, m, n_steps=100, n_quad=64)
-        iv_hi = implied_vol_surface(p_hi, s, m, n_steps=100, n_quad=64)
-        assert float(iv_hi[0, 0]) > float(iv_lo[0, 0])
+        iv_lo = implied_vol_surface(p_lo, s, m, n_steps=100, n_quad=128, u_max=100)
+        iv_hi = implied_vol_surface(p_hi, s, m, n_steps=100, n_quad=128, u_max=100)
+        curv_lo = 0.5 * (iv_lo[0, 0] + iv_lo[0, 2]) - iv_lo[0, 1]
+        curv_hi = 0.5 * (iv_hi[0, 0] + iv_hi[0, 2]) - iv_hi[0, 1]
+        assert curv_hi > curv_lo
