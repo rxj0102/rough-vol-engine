@@ -24,13 +24,12 @@ Demeterfi, K., Derman, E., Kamal, M., & Zou, J. (1999). More than you ever
 from __future__ import annotations
 
 import numpy as np
-from numpy import ndarray
+from scipy.stats import norm
 
 from rough_vol.variance.integrated import (
     annualized_integrated_variance,
     annualized_realized_variance,
 )
-
 
 # ---------------------------------------------------------------------------
 # Monte Carlo approach (rBergomi)
@@ -123,20 +122,20 @@ def variance_swap_strike_log_contract(
 ) -> float:
     """Model-free variance swap strike from the log-contract replication.
 
-    Uses the Carr-Madan / Demeterfi decomposition:
+    Demeterfi, Derman, Kamal and Zou (1999); Carr and Madan (1998). With
+    forward-measure prices of out-of-the-money options O(K),
 
-        K_var ≈ (2/T) ∫₋∞^∞ σ²(k, T) · w(k) dk
+        K_var = (2 / T) * int_0^inf O(K) / K^2 dK.
 
-    where σ(k, T) is the implied vol at log-moneyness k and w(k) is a
-    weight function derived from the log-contract payoff.  This is
-    approximated numerically over the available strike grid using linear
-    interpolation to extend between grid points.
+    Writing K = F e^k and pricing in units of the forward, dK / K^2 = e^(-k) dk / F, so
 
-    For a single maturity slice the formula simplifies to
+        K_var = (2 / T) * int o(k) e^(-k) dk,
 
-        K_var ≈ (1/T) · Σ_i σ²(k_i, T) · Δk_i
-
-    which integrates the total-variance profile over log-moneyness.
+    where o(k) is the Black price of the out-of-the-money option (put for k < 0, call
+    for k >= 0) with forward 1 and the slice's implied vol at k. The integral runs
+    over the quoted strikes only, so a narrow grid understates the strike (the
+    truncation bias of Jiang and Tian 2005). Smiles are interpolated linearly in k on
+    a grid of n_quad points between the first and last quoted strike.
 
     Parameters
     ----------
@@ -144,12 +143,12 @@ def variance_swap_strike_log_contract(
     T : float
         Maturity.  The closest surface maturity slice is used.
     n_quad : int
-        Unused (kept for API symmetry); integration uses the strike grid.
+        Number of integration points across the quoted strike range.
 
     Returns
     -------
     float
-        Model-free variance swap fair strike.
+        Model-free variance swap fair strike (annualised variance).
     """
     mats = surface.maturities
     idx = int(np.argmin(np.abs(mats - T)))
@@ -165,17 +164,20 @@ def variance_swap_strike_log_contract(
     k_v, sigma_v = k[valid], sigma[valid]
     order = np.argsort(k_v)
     k_v, sigma_v = k_v[order], sigma_v[order]
-
-    # ∫ σ²(k) dk over available log-moneyness range
-    integrand = sigma_v ** 2
-    integral = float(np.trapezoid(integrand, k_v))
-
-    # Normalise by the range and approximate as K_var ≈ integral / range
-    # Multiply by 1/(T * log-moneyness_range) * range = 1/T
-    k_range = k_v[-1] - k_v[0]
-    if k_range <= 0:
+    if k_v[-1] <= k_v[0]:
         return float("nan")
-    return integral / (k_range * T_slice) * (k_range / 1.0)
+
+    grid = np.linspace(k_v[0], k_v[-1], max(int(n_quad), 2 * len(k_v)))
+    vol = np.interp(grid, k_v, sigma_v)
+    sd = vol * np.sqrt(T_slice)
+    K = np.exp(grid)
+    d1 = (-grid + 0.5 * sd ** 2) / sd
+    d2 = d1 - sd
+    call = norm.cdf(d1) - K * norm.cdf(d2)
+    put = K * norm.cdf(-d2) - norm.cdf(-d1)
+    otm = np.where(grid < 0.0, put, call)
+    integral = float(np.trapezoid(otm * np.exp(-grid), grid))
+    return 2.0 * integral / T_slice
 
 
 # ---------------------------------------------------------------------------
